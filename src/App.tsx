@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Copy, ExternalLink, FileSearch, LoaderCircle, RotateCw, Search, ShieldCheck, Wallet, X } from "lucide-react";
-import { configuredAddress, connectWallet, connectedAccount, readReview, saveAddress, submitReview, validAddress } from "./lib/genlayer";
+import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Check, CircleAlert, Copy, ExternalLink, FileSearch, LoaderCircle, RotateCw, Search, ShieldCheck, Wallet, X } from "lucide-react";
+import { configuredAddress, connectWallet, connectedAccount, readReview, submitReview, validAddress } from "./lib/genlayer";
 import type { ReviewRecord } from "./lib/genlayer";
 import { fetchLiquidations, formatAsset, SAMPLE_TX } from "./lib/source";
 import type { LiquidationEvent, SourceCase } from "./lib/source";
@@ -23,8 +23,6 @@ function App() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
   const [wallet, setWallet] = useState<string | null>(null);
-  const [contractAddress, setContractAddress] = useState(configuredAddress());
-  const [setupOpen, setSetupOpen] = useState(false);
   const [review, setReview] = useState<ReviewRecord | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [txId, setTxId] = useState("");
@@ -32,6 +30,14 @@ function App() {
 
   const selected = useMemo(() => sourceCase?.events.find((event) => event.logIndex === selectedIndex) ?? null, [sourceCase, selectedIndex]);
   const readyToSubmit = phase === "ready" && sourceCase?.rpcVerified && selected && claim.trim().length >= 24 && claim.trim().length <= 600 && (!evidenceUrl.trim() || /^https:\/\//i.test(evidenceUrl.trim()));
+  const submitLabel = phase === "submitting" ? "Waiting for finality…"
+    : phase === "finalized" ? "Review finalized"
+    : !sourceCase ? "Inspect a transaction first"
+    : !selected ? "Choose a liquidation event"
+    : claim.trim().length < 24 ? "Add a specific review question"
+    : !/^https:\/\//i.test(evidenceUrl.trim()) && evidenceUrl.trim() ? "Use an HTTPS context URL"
+    : !wallet ? "Connect wallet to review"
+    : "Review with GenLayer";
 
   useEffect(() => {
     const routeListener = () => setRoute(window.location.pathname);
@@ -91,7 +97,7 @@ function App() {
       try { signer = await connectWallet(); setWallet(signer); }
       catch (error) { setMessage(error instanceof Error ? error.message : "Wallet connection failed."); return; }
     }
-    if (!validAddress(contractAddress)) { setSetupOpen(true); setMessage("Set the deployed StudioNet contract address before submitting."); return; }
+    if (!validAddress(configuredAddress())) { setMessage("The review service is unavailable right now. Please try again later."); return; }
     const id = assessmentId();
     setPhase("submitting"); setMessage("Waiting for wallet approval…"); setTxId("");
     try {
@@ -108,11 +114,6 @@ function App() {
       if (maybeTx) setTxId(maybeTx);
       setPhase("error"); setMessage(error instanceof Error ? error.message : "The review could not be completed.");
     }
-  }
-
-  function saveContract() {
-    if (!validAddress(contractAddress)) { setMessage("Enter a valid 20-byte contract address."); return; }
-    saveAddress(contractAddress); setMessage("StudioNet contract address saved in this browser."); setSetupOpen(false);
   }
 
   async function copy(value: string) {
@@ -142,9 +143,9 @@ function App() {
             <section className="hero" aria-labelledby="hero-title">
               <div className="hero-copy">
                 <p className="eyebrow"><span>INDEPENDENT CASE REVIEW</span><span className="eyebrow-line" /></p>
-                <h1 id="hero-title">A second look at<br /><em>the moment collateral moved.</em></h1>
-                <p className="hero-sub">Inspect a finalized Aave V3 liquidation. Verify the event from Ethereum, add the context behind your concern, and record a bounded review through GenLayer consensus.</p>
-                <a className="text-link" href="#new-review">Start with a transaction <ArrowDownRight size={15} /></a>
+                <h1 id="hero-title">Review an Aave V3<br /><em>liquidation with evidence.</em></h1>
+                <p className="hero-sub">Check the transaction and exact liquidation event against Ethereum sources. Add the concern and public context you want reviewed; GenLayer records an independent assessment.</p>
+                <a className="text-link" href="#new-review">Start a review <ArrowDownRight size={15} /></a>
               </div>
               <aside className="hero-stamp" aria-label="Review boundary">
                 <div className="stamp-top"><span>CASE SCOPE</span><span>01 / 01</span></div>
@@ -156,8 +157,8 @@ function App() {
             </section>
 
             <div className="section-heading" id="new-review">
-              <div><span className="section-no">01</span><h2>Open a case</h2></div>
-              <p>One transaction can contain multiple liquidations. Choose the exact event you want reviewed.</p>
+              <div><span className="section-no">01</span><h2>Start a review</h2></div>
+              <p>Paste an Ethereum transaction hash. If it contains multiple Aave liquidations, select the event you want reviewed.</p>
             </div>
 
             <section className="workspace">
@@ -166,15 +167,15 @@ function App() {
                 <form onSubmit={(e) => { e.preventDefault(); void inspectTransaction(); }}>
                   <label htmlFor="tx-hash">Transaction hash</label>
                   <div className="input-row">
-                    <div className="input-wrap"><Search size={16} /><input id="tx-hash" value={hash} onChange={(e) => setHash(e.target.value)} placeholder="0x…" spellCheck={false} autoComplete="off" /></div>
+                    <div className="input-wrap"><Search size={16} /><input id="tx-hash" value={hash} onChange={(e) => { setHash(e.target.value); setSourceCase(null); setSelectedIndex(null); setPhase("idle"); setMessage(""); }} placeholder="Paste a 32-byte Ethereum transaction hash" spellCheck={false} autoComplete="off" disabled={phase === "fetching" || phase === "submitting"} /></div>
                     <button className="button button-dark" disabled={phase === "fetching" || !hash.trim()} type="submit">{phase === "fetching" ? <><LoaderCircle className="spin" size={15} />Fetching</> : <><FileSearch size={15} />Inspect</>}</button>
                   </div>
                 </form>
-                <button className="sample-link" type="button" onClick={() => { setHash(SAMPLE_TX); void inspectTransaction(SAMPLE_TX); }}><span>Use a real sample</span><span>Ethereum · 2 liquidation events <ArrowRight size={13} /></span></button>
+                <button className="sample-link" type="button" disabled={phase === "fetching" || phase === "submitting"} onClick={() => { setHash(SAMPLE_TX); void inspectTransaction(SAMPLE_TX); }}><span>Use a real sample</span><span>Ethereum · 2 liquidation events <ArrowRight size={13} /></span></button>
 
                 {sourceCase && <div className="source-summary" aria-live="polite">
                   <div className="source-summary-head"><div><span className="source-kicker">SOURCE RECORD FOUND</span><strong>{sourceCase.events.length} liquidation {sourceCase.events.length === 1 ? "event" : "events"} in this transaction</strong></div><a href={sourceCase.transactionUrl} target="_blank" rel="noreferrer" aria-label="Open transaction in Blockscout"><ExternalLink size={15} /></a></div>
-                  <div className="source-checks"><span className="check-ok"><Check size={13} />Blockscout receipt</span><span className={sourceCase.rpcVerified ? "check-ok" : "check-warn"}>{sourceCase.rpcVerified ? <Check size={13} /> : <CircleAlert size={13} />}Independent RPC {sourceCase.rpcVerified ? "matches" : "not confirmed"}</span></div>
+                  <div className="source-checks"><span className="check-ok"><Check size={13} />Blockscout transaction data</span><span className={sourceCase.rpcVerified ? "check-ok" : "check-warn"}>{sourceCase.rpcVerified ? <Check size={13} /> : <CircleAlert size={13} />}Independent RPC {sourceCase.rpcVerified ? "matches" : "not confirmed"}</span></div>
                   <div className="source-meta"><span>BLOCK <b>{sourceCase.blockNumber.toString()}</b></span><span>MINED <b>{dateLabel(sourceCase.timestamp)}</b></span><span>CONFIRMATIONS <b>{sourceCase.confirmations.toLocaleString()}</b></span></div>
                   <div className="event-list" role="radiogroup" aria-label="Select the liquidation event to review">
                     {sourceCase.events.map((event, i) => <EventChoice key={event.logIndex} event={event} number={i + 1} selected={selectedIndex === event.logIndex} onClick={() => setSelectedIndex(event.logIndex)} />)}
@@ -192,8 +193,8 @@ function App() {
 
                 {message && <div className={`notice ${phase === "error" || (sourceCase && !sourceCase.rpcVerified) ? "notice-warn" : ""}`} role="status"><CircleAlert size={16} /><span>{message}{txId && <><br /><a href={`https://explorer-studio.genlayer.com/tx/${txId}`} target="_blank" rel="noreferrer">Inspect GenLayer transaction {short(txId)}</a></>}</span><button aria-label="Dismiss message" onClick={() => setMessage("")}><X size={15} /></button></div>}
 
-                <button className="button button-primary submit-button" type="button" disabled={!readyToSubmit} onClick={() => void onSubmit()}>
-                  {phase === "submitting" ? <><LoaderCircle className="spin" size={16} />Waiting for finality…</> : phase === "finalized" ? <><Check size={16} />Review finalized</> : wallet ? <><Activity size={16} />Review with GenLayer</> : <><Wallet size={16} />Connect wallet to continue</>}
+                <button className="button button-primary submit-button" type="button" disabled={!readyToSubmit} onClick={() => wallet ? void onSubmit() : void onConnect()}>
+                  {phase === "submitting" ? <><LoaderCircle className="spin" size={16} />{submitLabel}</> : phase === "finalized" ? <><Check size={16} />{submitLabel}</> : readyToSubmit && wallet ? <><Activity size={16} />{submitLabel}</> : readyToSubmit ? <><Wallet size={16} />{submitLabel}</> : <><ArrowRight size={16} />{submitLabel}</>}
                 </button>
                 <p className="submit-note">Use a public source for claims beyond on-chain facts; without context the result may stay inconclusive. StudioNet assessment data is permanent and public.</p>
               </div>
@@ -202,8 +203,8 @@ function App() {
                 <div className="aside-top"><span>WHAT THE RECORD PROVES</span><ShieldCheck size={17} /></div>
                 <div className="aside-rule" />
                 <ul className="proof-list">
-                  <li><span className="proof-index">A</span><span><b>Transaction</b><small>Receipt, block and success state from Ethereum.</small></span></li>
-                  <li><span className="proof-index">B</span><span><b>Selected event</b><small>Pool address, event signature and indexed log.</small></span></li>
+                  <li><span className="proof-index">A</span><span><b>Transaction</b><small>Explorer data checked against an independent Ethereum receipt.</small></span></li>
+                  <li><span className="proof-index">B</span><span><b>Selected Aave event</b><small>Pool, event signature, log index, and decoded fields.</small></span></li>
                   <li><span className="proof-index">C</span><span><b>Context review</b><small>Validators assess the cited concern, not just the event.</small></span></li>
                 </ul>
                 <div className="aside-caution"><strong><CircleAlert size={15} />A review is not a remedy.</strong><p>It cannot undo a liquidation, recover assets, or establish legal wrongdoing. Missing evidence stays inconclusive.</p></div>
@@ -215,7 +216,7 @@ function App() {
               <div className="how-intro"><p className="eyebrow"><span>METHOD</span><span className="eyebrow-line" /></p><h2>Facts first.<br /><em>Judgment second.</em></h2><p>Liquidation eligibility and event data are protocol facts. Whether the context supports a particular concern is the part that benefits from independent review.</p></div>
               <div className="steps">
                 <article><span>01</span><div><h3>Read the event</h3><p>Fetch the transaction and its Aave V3 liquidation logs from Ethereum mainnet. A batched transaction stays split into individual events.</p></div></article>
-                <article><span>02</span><div><h3>Compare two sources</h3><p>The browser checks the explorer response against a separate Ethereum JSON-RPC receipt. GenLayer independently fetches both again.</p></div></article>
+                <article><span>02</span><div><h3>Compare two sources</h3><p>The desk checks explorer transaction and log data against an Ethereum receipt. GenLayer independently fetches and compares the case again.</p></div></article>
                 <article><span>03</span><div><h3>Record a bounded review</h3><p>Validators assess the selected concern against the cited context. Finalized results are read back from the contract before they appear here.</p></div></article>
               </div>
             </section>
@@ -225,10 +226,6 @@ function App() {
               <a href="https://aave.com/faq" target="_blank" rel="noreferrer" className="text-link">Aave liquidation guide <ArrowUpRight size={15} /></a>
             </section>
 
-            <section className="operator-section">
-              <button className="operator-toggle" onClick={() => setSetupOpen((open) => !open)} aria-expanded={setupOpen}><span>Operator setup</span><ChevronDown size={16} className={setupOpen ? "rotate" : ""} /></button>
-              {setupOpen && <div className="operator-body"><div><b>StudioNet contract</b><p>Paste the deployed contract address. Reads are public; writes require a connected StudioNet wallet.</p></div><div className="operator-input"><input value={contractAddress} onChange={(e) => setContractAddress(e.target.value)} placeholder="0x…" /><button className="button button-dark" onClick={saveContract}>Save address</button></div>{contractAddress && !validAddress(contractAddress) && <small className="inline-error">This is not a valid contract address.</small>}</div>}
-            </section>
           </>
         )}
       </main>

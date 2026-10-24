@@ -3,7 +3,6 @@ import { getReceiptFailureMessage, isFailedReceipt } from "./receipt";
 const env = import.meta.env;
 const ENDPOINT = String(env.VITE_GENLAYER_ENDPOINT || "https://studio.genlayer.com/api").trim();
 const CONFIGURED_ADDRESS = String(env.VITE_CONTRACT_ADDRESS || "").trim();
-const ADDRESS_KEY = "liquidation-review.contract-address";
 export const STUDIONET_CHAIN_ID = "61999";
 export const STUDIONET_CHAIN_HEX = "0xf22f";
 
@@ -28,9 +27,8 @@ export function injectedProvider(): Provider | null {
   return providers.find((p) => p.isRabby) ?? (root.isRabby ? root : providers[0] ?? root);
 }
 export function configuredAddress(): string {
-  return typeof window !== "undefined" ? window.localStorage.getItem(ADDRESS_KEY)?.trim() || CONFIGURED_ADDRESS : CONFIGURED_ADDRESS;
+  return CONFIGURED_ADDRESS;
 }
-export function saveAddress(address: string) { window.localStorage.setItem(ADDRESS_KEY, address.trim()); }
 export function validAddress(address: string) { return /^0x[0-9a-fA-F]{40}$/.test(address.trim()); }
 
 export async function connectedAccount(): Promise<string | null> {

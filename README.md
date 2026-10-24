@@ -21,8 +21,9 @@ The UI has a clearly labeled real Ethereum sample transaction:
 - Block: `26196204`
 - Mined: `2026-10-15T06:45:11Z`
 - Aave V3 `LiquidationCall` logs: `2295` and `2306`
-- Sources: [Blockscout transaction](https://eth.blockscout.com/tx/0xb8d6664c5317bad149d2d3cd46794082580a5a2ae9b0cff74b7c9ab039b0c008) and Routescan's Ethereum mainnet `eth_getTransactionReceipt` endpoint.
-- Independent source comparison: both endpoints returned the same successful mainnet block and exactly two matching Aave V3 liquidation events, at log indices 2295 and 2306. The UI rejects a receipt with a different chain ID, block, status, event count, or event data.
+- Browser sources: [Blockscout transaction](https://eth.blockscout.com/tx/0xb8d6664c5317bad149d2d3cd46794082580a5a2ae9b0cff74b7c9ab039b0c008) and PublicNode's Ethereum JSON-RPC receipt.
+- Contract sources: Blockscout transaction/log data and Routescan's Ethereum mainnet `eth_getTransactionReceipt` endpoint. The contract independently checks the successful block and exact selected Aave V3 event before asking validators to assess context.
+- The sample contains two matching Aave V3 liquidation events at log indices 2295 and 2306. The browser rejects a receipt with a different chain ID, block, status, event count, or event data.
 
 The sample demonstrates event selection and decoding only. It is not an example of a fair/unfair outcome or a validated market-price claim.
 
@@ -35,7 +36,7 @@ npm install
 npm run dev
 ```
 
-Create `.env.local` from `.env.example` and set `VITE_CONTRACT_ADDRESS` after deploying `contracts/liquidation_review.py` to StudioNet. The local-storage Operator setup field can override the public address during development.
+Create `.env.local` from `.env.example` and set `VITE_CONTRACT_ADDRESS` after deploying `contracts/liquidation_review.py` to StudioNet. The application reads this build-time configuration; users do not enter deployment addresses in the product.
 
 ```powershell
 npm run build
@@ -51,7 +52,7 @@ Consensus compares the outcome, basis, confidence, and digests of the transactio
 
 ## Current status
 
-- Live source verification: Blockscout and Routescan independently confirmed the sample transaction, Ethereum mainnet receipt status, block, and selected Aave V3 liquidation event.
+- Live source verification: the browser checks Blockscout data against PublicNode; the contract checks Blockscout data against Routescan. Both paths confirm Ethereum mainnet receipt status, block, and the selected Aave V3 liquidation event.
 - The production site is live at https://liquidation-review-desk.vercel.app/. Its production build is configured with StudioNet contract `0x0Eb39598774744dFf564E1781c10b6eEe85aB853`.
 - Live StudioNet assessment: transaction `0xf71d50627cd21fbcf4a9d242c8ea2b9a54267588bef3a363551a3da4059aa984` finalized with `MAJORITY_AGREE`. Readback of `liq-stable-20261024` confirmed the exact sample transaction and selected log index `2295`, with outcome `no_concern_identified` for the narrow claim that at least 1 USDC of debt was repaid. This is not a fairness finding.
 - Local GenLayer direct tests: 24 passed. Frontend source tests: 5 passed. The production frontend build succeeds. These checks do not substitute for live consensus evidence.
