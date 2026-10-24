@@ -28,6 +28,63 @@ def test_real_batched_transaction_selects_each_exact_liquidation_event(direct_vm
     assert first["liquidation"]["log_index"] != second["liquidation"]["log_index"]
 
 
+def test_cli_hex_integer_normalizes_to_the_same_transaction_hash(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    assert contract._validate_tx_hash(int(TX_HASH, 16)) == TX_HASH
+
+
+def test_independent_routescan_receipt_matches_the_selected_aave_event(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    receipt_logs = [{
+        "address": item["address"]["hash"],
+        "topics": item["topics"],
+        "data": item["data"],
+        "logIndex": hex(int(item["index"])),
+    } for item in LOGS["items"]]
+    receipt = {
+        "transactionHash": TX_HASH,
+        "status": "0x1",
+        "blockNumber": hex(int(TX["block_number"])),
+        "logs": receipt_logs,
+    }
+    direct_vm.mock_web(r".*eth\.blockscout\.com/api/v2/transactions/" + TX_HASH + r"/logs$", {
+        "status": 200, "body": json.dumps(LOGS),
+    })
+    direct_vm.mock_web(r".*eth\.blockscout\.com/api/v2/transactions/" + TX_HASH + r"$", {
+        "status": 200, "body": json.dumps(TX),
+    })
+    direct_vm.mock_web(r".*api\.routescan\.io/v2/network/mainnet/evm/1/etherscan/api.*", {
+        "status": 200, "body": json.dumps({"jsonrpc": "2.0", "id": 1, "result": receipt}),
+    })
+
+    result = contract._fetch_source_case(TX_HASH, 2295)
+    assert result["case"]["block_number"] == int(TX["block_number"])
+    assert result["case"]["liquidation"]["log_index"] == 2295
+    assert result["case"]["liquidation"]["borrower"] == "0x46b1589e796c1102f68e2889a3315e42e600a901"
+    assert result["rpc_digest"]
+
+
+def test_source_fact_digests_ignore_provider_formatting_and_confirmation_drift(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    parsed = contract._parse_source_facts(json.dumps(TX), json.dumps(LOGS), TX_HASH, 2295)
+    first = contract._source_fact_digests(parsed, parsed)
+    updated = {**parsed, "confirmations": parsed["confirmations"] + 1}
+    second = contract._source_fact_digests(updated, updated)
+    assert first == second
+
+
+def test_large_blockscout_payload_is_not_truncated_before_json_parsing(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    tx = {**TX, "expanded_metadata": "x" * 20000}
+    logs = {**LOGS, "expanded_metadata": "y" * 20000}
+    tx_body = contract._bounded_body(json.dumps(tx))
+    logs_body = contract._bounded_body(json.dumps(logs))
+    assert len(tx_body) > 18000
+    assert len(logs_body) > 18000
+    parsed = contract._parse_source_facts(tx_body, logs_body, TX_HASH, 2295)
+    assert parsed["block_number"] == 26196204
+
+
 @pytest.mark.parametrize("mutator", [
     lambda tx, logs: ({**tx, "status": "error"}, logs),
     lambda tx, logs: ({**tx, "hash": "0x" + "0" * 64}, logs),

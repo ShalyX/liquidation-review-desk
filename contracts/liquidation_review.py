@@ -24,14 +24,34 @@ ERROR_REVIEW = "[REVIEW]"
 MAX_ID = 80
 MAX_CLAIM = 600
 MAX_URL = 500
-MAX_BODY = 18000
+# Blockscout v2 expands contract/token metadata into both transaction and log
+# responses. Real Aave liquidation receipts can exceed 60 KB; truncating before
+# JSON parsing turns a valid source receipt into a false source failure.
+MAX_BODY = 100000
 MAX_REASON = 850
 POOL = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
 LIQUIDATION_TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
 BLOCKSCOUT = "https://eth.blockscout.com/api/v2/transactions/"
-ETHEREUM_RPC = "https://ethereum-rpc.publicnode.com"
+ROUTESCAN_RECEIPT = (
+    "https://api.routescan.io/v2/network/mainnet/evm/1/etherscan/api"
+    "?module=proxy&action=eth_getTransactionReceipt&txhash="
+)
 OUTCOMES = ("concern_found", "no_concern_identified", "unclear", "source_failure")
 BASES = ("supporting_context", "contradicting_context", "insufficient_context", "unrelated_context", "source_unavailable")
+
+
+class _SourceStageError(Exception):
+    def __init__(self, stage: str, error_type: str):
+        self.stage = stage
+        self.error_type = error_type
+
+
+def _source_step(stage: str, operation):
+    try:
+        return operation()
+    except Exception as exc:
+        # Keep public diagnostics useful without storing endpoint bodies or URLs.
+        raise _SourceStageError(stage, type(exc).__name__)
 
 
 @allow_storage
@@ -73,6 +93,13 @@ def _need_text(value, label: str, maximum: int) -> str:
 
 
 def _tx_hash(value: str) -> str:
+    # GenLayer CLI currently parses bare 0x-prefixed --args as integers. Accept
+    # that equivalent bytes32 representation and restore leading zeroes before
+    # applying the canonical string validation below.
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0 or value >= 2**256:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} transaction hash integer is outside the 32-byte range")
+        value = f"0x{value:064x}"
     value = _need_text(value, "transaction hash", 66).lower()
     if len(value) != 66 or not value.startswith("0x") or any(c not in "0123456789abcdef" for c in value[2:]):
         raise gl.vm.UserError(f"{ERROR_EXPECTED} transaction hash must be 32-byte hex")
@@ -111,6 +138,35 @@ def _body_text(body) -> str:
     if isinstance(body, bytes):
         body = body.decode("utf-8", errors="replace")
     return str(body or "")[:MAX_BODY]
+
+
+def _stable_digest(value: dict) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _source_digests(indexed_case: dict, rpc_case: dict) -> dict:
+    # Confirmation counts and provider JSON formatting change across independent
+    # reads. Fingerprint the canonical transaction and selected event facts only.
+    transaction = {
+        "tx_hash": indexed_case["tx_hash"],
+        "status": indexed_case["status"],
+        "block_number": indexed_case["block_number"],
+        "timestamp": indexed_case["timestamp"],
+    }
+    event = {"pool": indexed_case["pool"], "liquidation": indexed_case["liquidation"]}
+    rpc_transaction = {
+        "tx_hash": rpc_case["tx_hash"],
+        "status": rpc_case["status"],
+        "block_number": rpc_case["block_number"],
+        "timestamp": rpc_case["timestamp"],
+    }
+    rpc_event = {"pool": rpc_case["pool"], "liquidation": rpc_case["liquidation"]}
+    return {
+        "transaction_digest": _stable_digest(transaction),
+        "logs_digest": _stable_digest(event),
+        "rpc_digest": _stable_digest({"transaction": rpc_transaction, "event": rpc_event}),
+    }
 
 
 def _word_address(word: str) -> str:
@@ -194,40 +250,32 @@ def _assessment_result(value) -> dict:
 
 
 def _fetch_case(tx_hash: str, log_index: int) -> dict:
-    tx_response = gl.nondet.web.get(BLOCKSCOUT + tx_hash)
-    logs_response = gl.nondet.web.get(BLOCKSCOUT + tx_hash + "/logs")
-    tx_status = int(tx_response.status)
-    logs_status = int(logs_response.status)
+    tx_response = _source_step("transaction endpoint request", lambda: gl.nondet.web.get(BLOCKSCOUT + tx_hash))
+    logs_response = _source_step("logs endpoint request", lambda: gl.nondet.web.get(BLOCKSCOUT + tx_hash + "/logs"))
+    tx_status = _source_step("transaction HTTP status", lambda: int(tx_response.status))
+    logs_status = _source_step("logs HTTP status", lambda: int(logs_response.status))
     if tx_status < 200 or tx_status >= 300 or logs_status < 200 or logs_status >= 300:
-        raise ValueError(f"Blockscout HTTP failure tx={tx_status} logs={logs_status}")
-    tx_body = _body_text(tx_response.body)
-    logs_body = _body_text(logs_response.body)
-    indexed_case = _parse_tx_and_event(tx_body, logs_body, tx_hash, log_index)
+        raise _SourceStageError("Blockscout HTTP response", "HTTPStatusFailure")
+    tx_body = _source_step("transaction response body", lambda: _body_text(tx_response.body))
+    logs_body = _source_step("logs response body", lambda: _body_text(logs_response.body))
+    indexed_case = _source_step("Blockscout receipt parsing", lambda: _parse_tx_and_event(tx_body, logs_body, tx_hash, log_index))
 
-    rpc_response = gl.nondet.web.request(
-        ETHEREUM_RPC,
-        method="POST",
-        body={"jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionReceipt", "params": [tx_hash]},
+    rpc_response = _source_step(
+        "Routescan Ethereum receipt request",
+        lambda: gl.nondet.web.get(ROUTESCAN_RECEIPT + tx_hash),
     )
-    rpc_status = int(getattr(rpc_response, "status_code", getattr(rpc_response, "status", 0)))
+    rpc_status = int(rpc_response.status)
     if rpc_status < 200 or rpc_status >= 300:
-        raise ValueError(f"independent Ethereum RPC returned HTTP {rpc_status}")
-    rpc_body = _body_text(rpc_response.body)
-    rpc_envelope = json.loads(rpc_body)
+        raise ValueError(f"independent Routescan receipt returned HTTP {rpc_status}")
+    rpc_body = _source_step("Ethereum receipt RPC body", lambda: _body_text(rpc_response.body))
+    rpc_envelope = _source_step("Ethereum receipt RPC JSON", lambda: json.loads(rpc_body))
     receipt = rpc_envelope.get("result") if isinstance(rpc_envelope, dict) else None
+    if isinstance(receipt, str):
+        receipt = _source_step("Routescan receipt result JSON", lambda: json.loads(receipt))
+    if not isinstance(receipt, dict) and isinstance(rpc_envelope, dict):
+        receipt = rpc_envelope if "transactionHash" in rpc_envelope else None
     if not isinstance(receipt, dict) or rpc_envelope.get("error"):
-        raise ValueError("independent Ethereum RPC has no transaction receipt")
-    chain_response = gl.nondet.web.request(
-        ETHEREUM_RPC,
-        method="POST",
-        body={"jsonrpc": "2.0", "id": 2, "method": "eth_chainId", "params": []},
-    )
-    chain_status = int(getattr(chain_response, "status_code", getattr(chain_response, "status", 0)))
-    if chain_status < 200 or chain_status >= 300:
-        raise ValueError(f"independent Ethereum RPC chain check returned HTTP {chain_status}")
-    chain_envelope = json.loads(_body_text(chain_response.body))
-    if not isinstance(chain_envelope, dict) or str(chain_envelope.get("result", "")).lower() != "0x1" or chain_envelope.get("error"):
-        raise ValueError("independent Ethereum RPC is not on Ethereum mainnet")
+        raise ValueError("independent Routescan API has no transaction receipt")
     if str(receipt.get("transactionHash", "")).lower() != tx_hash or str(receipt.get("status", "")).lower() != "0x1":
         raise ValueError("independent RPC transaction hash or status does not match")
     try:
@@ -252,17 +300,18 @@ def _fetch_case(tx_hash: str, log_index: int) -> dict:
             })
         except Exception:
             continue
-    rpc_case = _parse_tx_and_event(
-        json.dumps({"hash": tx_hash, "status": "ok", "block_number": rpc_block,
-                    "timestamp": indexed_case["timestamp"], "confirmations": indexed_case["confirmations"]}),
-        json.dumps({"items": converted_logs}), tx_hash, log_index,
+    rpc_case = _source_step(
+        "independent receipt event parsing",
+        lambda: _parse_tx_and_event(
+            json.dumps({"hash": tx_hash, "status": "ok", "block_number": rpc_block,
+                        "timestamp": indexed_case["timestamp"], "confirmations": indexed_case["confirmations"]}),
+            json.dumps({"items": converted_logs}), tx_hash, log_index,
+        ),
     )
     if rpc_case["liquidation"] != indexed_case["liquidation"]:
         raise ValueError("explorer and independent RPC disagree on liquidation event fields")
-    return {"case": indexed_case,
-            "transaction_digest": hashlib.sha256(tx_body.encode()).hexdigest(),
-            "logs_digest": hashlib.sha256(logs_body.encode()).hexdigest(),
-            "rpc_digest": hashlib.sha256(rpc_body.encode()).hexdigest()}
+    digests = _source_digests(indexed_case, rpc_case)
+    return {"case": indexed_case, **digests}
 
 
 def _fetch_evidence(url: str) -> dict:
@@ -278,9 +327,13 @@ def _review(tx_hash: str, log_index: int, claim: str, evidence_url: str) -> dict
     try:
         fetched = _fetch_case(tx_hash, log_index)
         case = fetched["case"]
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, _SourceStageError):
+            rationale = f"Independent source verification failed during {exc.stage} ({exc.error_type})."
+        else:
+            rationale = f"Independent source verification failed before evidence review ({type(exc).__name__})."
         return {"outcome": "source_failure", "basis": "source_unavailable", "confidence": "low",
-                "rationale": "The selected Ethereum transaction or Aave V3 event could not be independently verified."[:MAX_REASON],
+                "rationale": rationale[:MAX_REASON],
                 "case": {}, "transaction_digest": "", "logs_digest": "", "rpc_digest": "", "evidence_digest": ""}
     try:
         evidence = _fetch_evidence(evidence_url)
@@ -333,6 +386,22 @@ class LiquidationReview(gl.Contract):
     def _parse_source_facts(self, tx_json: str, logs_json: str, tx_hash: str, log_index: int) -> dict:
         """Expose strict source parsing to direct tests."""
         return _parse_tx_and_event(tx_json, logs_json, tx_hash, log_index)
+
+    def _fetch_source_case(self, tx_hash: str, log_index: int) -> dict:
+        """Expose cross-source transaction verification to direct tests."""
+        return _fetch_case(tx_hash, log_index)
+
+    def _source_fact_digests(self, indexed_case: dict, rpc_case: dict) -> dict:
+        """Expose stable source fact fingerprints to direct tests."""
+        return _source_digests(indexed_case, rpc_case)
+
+    def _validate_tx_hash(self, value) -> str:
+        """Expose transaction hash normalization to direct tests."""
+        return _tx_hash(value)
+
+    def _bounded_body(self, body) -> str:
+        """Expose bounded response handling to direct tests."""
+        return _body_text(body)
 
     def _parse_review_result(self, value) -> dict:
         """Expose the bounded review parser to direct tests."""
