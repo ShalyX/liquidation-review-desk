@@ -1,0 +1,28 @@
+{
+  "name": "liquidation-review-desk",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A public case review desk for Aave V3 liquidations, recorded with GenLayer consensus.",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "genlayer-js": "1.1.8",
+    "lucide-react": "0.468.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "viem": "2.56.3"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "5.2.0",
+    "typescript": "5.7.2",
+    "vite": "8.3.4",
+    "vitest": "3.2.4"
+  }
+}
