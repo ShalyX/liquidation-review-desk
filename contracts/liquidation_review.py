@@ -25,9 +25,10 @@ MAX_ID = 80
 MAX_CLAIM = 600
 MAX_URL = 500
 # Blockscout v2 expands contract/token metadata into both transaction and log
-# responses. Real Aave liquidation receipts can exceed 60 KB; truncating before
-# JSON parsing turns a valid source receipt into a false source failure.
-MAX_BODY = 100000
+# responses. A real Aave liquidation batch returned 109,393 bytes; truncating
+# before JSON parsing turned a valid source receipt into a false source failure.
+# Keep a finite bound while allowing expanded multi-event receipts through.
+MAX_BODY = 200000
 MAX_REASON = 850
 POOL = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
 LIQUIDATION_TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"

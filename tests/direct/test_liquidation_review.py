@@ -75,12 +75,13 @@ def test_source_fact_digests_ignore_provider_formatting_and_confirmation_drift(d
 
 def test_large_blockscout_payload_is_not_truncated_before_json_parsing(direct_vm, direct_deploy, direct_alice):
     contract = deploy(direct_deploy)
+    # Regression case: a live multi-event liquidation returned 109,393 bytes.
     tx = {**TX, "expanded_metadata": "x" * 20000}
-    logs = {**LOGS, "expanded_metadata": "y" * 20000}
+    logs = {**LOGS, "expanded_metadata": "y" * 100000}
     tx_body = contract._bounded_body(json.dumps(tx))
     logs_body = contract._bounded_body(json.dumps(logs))
     assert len(tx_body) > 18000
-    assert len(logs_body) > 18000
+    assert len(logs_body) > 100000
     parsed = contract._parse_source_facts(tx_body, logs_body, TX_HASH, 2295)
     assert parsed["block_number"] == 26196204
 
