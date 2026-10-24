@@ -17,7 +17,7 @@ export type ReviewRecord = {
   collateral_asset: string; debt_asset: string; debt_to_cover: string; collateral_amount: string;
   receive_a_token: boolean; claim: string; evidence_url: string; outcome: string; basis: string;
   confidence: string; rationale: string; transaction_digest: string; logs_digest: string;
-  rpc_digest: string; evidence_digest: string;
+  rpc_digest: string; evidence_digest: string; contract_address?: string;
   created_at: bigint | number;
 };
 
@@ -70,12 +70,14 @@ export async function readReview(id: string): Promise<ReviewRecord> {
   const api = await client();
   const activeAddress = address();
   try {
-    return await api.readContract({ address: activeAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+    const record = await api.readContract({ address: activeAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+    return { ...record, contract_address: activeAddress };
   } catch (activeError) {
     for (const legacyAddress of LEGACY_READ_ADDRESSES) {
       if (legacyAddress.toLowerCase() === activeAddress.toLowerCase()) continue;
       try {
-        return await api.readContract({ address: legacyAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+        const record = await api.readContract({ address: legacyAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+        return { ...record, contract_address: legacyAddress };
       } catch {
         // Preserve the active contract error if no known deployment has this record.
       }
