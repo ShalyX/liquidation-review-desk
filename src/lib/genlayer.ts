@@ -3,7 +3,10 @@ import { getReceiptFailureMessage, isFailedReceipt } from "./receipt";
 const env = import.meta.env;
 const ENDPOINT = String(env.VITE_GENLAYER_ENDPOINT || "https://studio.genlayer.com/api").trim();
 const CONFIGURED_ADDRESS = String(env.VITE_CONTRACT_ADDRESS || "").trim();
-const LEGACY_READ_ADDRESSES = ["0x0Eb39598774744dFf564E1781c10b6eEe85aB853"];
+const LEGACY_READ_ADDRESSES = [
+  "0x69c6b3F94611CA2e09E908b6740D82Aec7DF0eF4",
+  "0x0Eb39598774744dFf564E1781c10b6eEe85aB853",
+];
 export const STUDIONET_CHAIN_ID = "61999";
 export const STUDIONET_CHAIN_HEX = "0xf22f";
 

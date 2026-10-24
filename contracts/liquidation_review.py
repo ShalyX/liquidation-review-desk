@@ -247,6 +247,23 @@ def _assessment_result(value) -> dict:
         raise ValueError("review rationale is empty or too long")
     if outcome in ("unclear", "source_failure") and confidence == "high":
         raise ValueError("unclear or failed evidence cannot receive high confidence")
+    rationale_lower = rationale.lower()
+    contradicts_concern = any(marker in rationale_lower for marker in (
+        "contradicts the concern", "does not support the concern", "doesn't support the concern",
+        "below the threshold", "below the stated threshold", "below the requested threshold",
+        "fails to meet the threshold", "does not meet the threshold", "not meet the threshold",
+        "less than the threshold", "under the threshold", "not above the threshold",
+    ))
+    supports_concern = any(marker in rationale_lower for marker in (
+        "supports the concern", "supports a material concern", "supports the stated concern",
+        "exceeds the threshold", "above the threshold",
+    ))
+    if outcome == "concern_found" and (basis != "supporting_context" or contradicts_concern):
+        raise ValueError("concern verdict conflicts with its basis or rationale")
+    if outcome == "no_concern_identified" and (
+        basis == "supporting_context" or (supports_concern and not contradicts_concern)
+    ):
+        raise ValueError("no-concern verdict conflicts with its basis or rationale")
     return {"outcome": outcome, "basis": basis, "confidence": confidence, "rationale": rationale}
 
 
@@ -359,13 +376,15 @@ Context source body: {evidence['text'][:10000]}
 
 Question: Does the cited context provide specific, relevant support for investigating the user's concern about this exact liquidation? Do not infer unfairness from the fact that a liquidation occurred, or from a price move alone. Do not treat missing context as proof of a problem. `no_concern_identified` means the supplied evidence does not substantiate the stated concern; it does not certify that the liquidation was fair. Use `unclear` when context is thin, indirect, or cannot establish the point. Use `concern_found` only when specific source content supports a material concern. Use `source_failure` only when an expected source was unavailable.
 
+For a concern with a numeric threshold, first state the exact comparison in your reasoning. When evidence provides quantities and prices, convert each token quantity using its correct decimals, calculate collateral value and debt value in a common currency, then compare the resulting ratio with the threshold. A value below the user's stated threshold does not support a claim that it exceeds that threshold. Keep the outcome, basis, and rationale aligned: a rationale that says the evidence is below or contradicts the threshold must never be paired with `concern_found` or `supporting_context`. If the evidence does not permit a reliable calculation, return `unclear` rather than guessing.
+
 Return JSON only with exactly four keys: outcome (`concern_found`, `no_concern_identified`, `unclear`, `source_failure`), basis (`supporting_context`, `contradicting_context`, `insufficient_context`, `unrelated_context`, `source_unavailable`), confidence (`high`, `medium`, `low`), rationale (one or two plain sentences, max 850 characters). `unclear` and `source_failure` must use low or medium confidence. Do not output the exact transaction details in the rationale."""
     try:
         raw = gl.nondet.exec_prompt(prompt, response_format="json")
         result = _assessment_result(raw)
     except Exception:
         result = {"outcome": "unclear", "basis": "insufficient_context", "confidence": "low",
-                  "rationale": "Validators could not produce a complete, consistent review from the available context."}
+                  "rationale": "The validators' verdict and rationale were inconsistent, so the review remains unclear."}
     result.update({"case": case, "transaction_digest": fetched["transaction_digest"],
                    "logs_digest": fetched["logs_digest"], "rpc_digest": fetched["rpc_digest"],
                    "evidence_digest": evidence["digest"]})
