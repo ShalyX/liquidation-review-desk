@@ -51,8 +51,9 @@ Consensus compares the outcome, basis, confidence, and digests of the transactio
 
 ## Current status
 
-- Live source verification: the browser fetched Blockscout and PublicNode independently and confirmed the sample transaction, mainnet chain ID, block, and full Aave event set. Frontend source tests cover omitted events, wrong block, reverted/wrong-hash receipts, and wrong-chain responses.
-- Local GenLayer contract lint plus 20 direct adversarial tests and a production frontend build pass. StudioNet deployment, live consensus tests, public hosting, and submission are still pending; do not infer their completion from local checks.
+- Live source verification: the production site fetched Blockscout and PublicNode independently and confirmed the sample transaction, mainnet chain ID, block, and full Aave event set. Frontend source tests cover omitted events, wrong block, reverted/wrong-hash receipts, and wrong-chain responses.
+- The production site is live at https://liquidation-review-desk.vercel.app/ from commit `7f0ed9b`. The sample flow was verified in the deployed app. StudioNet deployment and live consensus/readback tests remain pending; the wallet submission control stays unavailable until a contract address is configured.
+- Local GenLayer contract lint, 20 direct adversarial tests, five frontend source tests, and the production frontend build pass. These checks do not substitute for live consensus evidence.
 - Historical Aave oracle prices and reserve configuration are not yet reconstructed at the transaction block. Until then, this tool must not state that a liquidation price was fair or unfair.
 
 ## Data and privacy
