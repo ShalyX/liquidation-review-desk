@@ -39,7 +39,7 @@ Create `.env.local` from `.env.example` and set `VITE_CONTRACT_ADDRESS` after de
 
 ```powershell
 npm run build
-python -m pip install -r requirements.txt
+python -m pip install -r tests/requirements.txt
 python -m pytest -p no:cacheprovider tests/direct -q
 ```
 
