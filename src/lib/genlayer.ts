@@ -3,6 +3,7 @@ import { getReceiptFailureMessage, isFailedReceipt } from "./receipt";
 const env = import.meta.env;
 const ENDPOINT = String(env.VITE_GENLAYER_ENDPOINT || "https://studio.genlayer.com/api").trim();
 const CONFIGURED_ADDRESS = String(env.VITE_CONTRACT_ADDRESS || "").trim();
+const LEGACY_READ_ADDRESSES = ["0x0Eb39598774744dFf564E1781c10b6eEe85aB853"];
 export const STUDIONET_CHAIN_ID = "61999";
 export const STUDIONET_CHAIN_HEX = "0xf22f";
 
@@ -66,7 +67,21 @@ const address = () => {
 };
 
 export async function readReview(id: string): Promise<ReviewRecord> {
-  return await (await client()).readContract({ address: address(), functionName: "get_assessment", args: [id] }) as ReviewRecord;
+  const api = await client();
+  const activeAddress = address();
+  try {
+    return await api.readContract({ address: activeAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+  } catch (activeError) {
+    for (const legacyAddress of LEGACY_READ_ADDRESSES) {
+      if (legacyAddress.toLowerCase() === activeAddress.toLowerCase()) continue;
+      try {
+        return await api.readContract({ address: legacyAddress, functionName: "get_assessment", args: [id] }) as ReviewRecord;
+      } catch {
+        // Preserve the active contract error if no known deployment has this record.
+      }
+    }
+    throw activeError;
+  }
 }
 
 export async function submitReview(input: { account: string; id: string; txHash: string; logIndex: number; claim: string; evidenceUrl: string; onSubmitted?: (hash: string) => void }): Promise<{ hash: string; record: ReviewRecord }> {
