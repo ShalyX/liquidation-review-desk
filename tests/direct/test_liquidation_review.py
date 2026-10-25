@@ -179,6 +179,65 @@ def test_numeric_ratio_accepts_consistent_5_percent_and_6_percent_results(direct
     assert above_5["outcome"] == "concern_found"
 
 
+def test_historical_prices_apply_token_decimals_and_resolve_5_vs_6_percent(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    case = {
+        "timestamp": "2026-10-15T02:28:59.000000Z",
+        "liquidation": {
+            "collateral_asset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "collateral_amount": "205896048323334953746",
+            "debt_asset": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "debt_to_cover": "461189109265",
+        },
+    }
+    url = "https://coins.llama.fi/prices/historical/1792031339/ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2,ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"
+    body = json.dumps({"coins": {
+        "ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {
+            "decimals": 18, "symbol": "WETH", "price": "2362.9375763722296", "timestamp": 1792031340,
+        },
+        "ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7": {
+            "decimals": 6, "symbol": "USDT", "price": "0.9990796818835849", "timestamp": 1792031340,
+        },
+    }})
+    six_percent = contract._historical_price_threshold_result(
+        case, "Was collateral more than 6% above debt repaid?", url, body,
+    )
+    five_percent = contract._historical_price_threshold_result(
+        case, "Was collateral more than 5% above debt repaid?", url, body,
+    )
+    assert six_percent["outcome"] == "no_concern_identified"
+    assert six_percent["basis"] == "contradicting_context"
+    assert "5.5" in six_percent["rationale"]
+    assert five_percent["outcome"] == "concern_found"
+    assert five_percent["basis"] == "supporting_context"
+
+
+def test_historical_price_result_requires_matching_snapshot_time_and_known_decimals(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    case = {
+        "timestamp": "2026-10-15T02:28:59Z",
+        "liquidation": {
+            "collateral_asset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "collateral_amount": "205896048323334953746",
+            "debt_asset": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "debt_to_cover": "461189109265",
+        },
+    }
+    url = "https://coins.llama.fi/prices/historical/1792031339/ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2,ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"
+    body = json.dumps({"coins": {
+        "ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {"decimals": 18, "price": "2362.9", "timestamp": 1792031340},
+        "ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7": {"decimals": 6, "price": "0.999", "timestamp": 1792031340},
+    }})
+    mismatched_time = url.replace("1792031339", "1792032000")
+    assert contract._historical_price_threshold_result(
+        case, "Was collateral more than 6% above debt repaid?", mismatched_time, body,
+    ) is None
+    wrong_decimals = body.replace('"decimals": 18', '"decimals": 6', 1)
+    assert contract._historical_price_threshold_result(
+        case, "Was collateral more than 6% above debt repaid?", url, wrong_decimals,
+    ) is None
+
+
 def test_equivalence_compares_every_consequential_source_and_decision_field(direct_vm, direct_deploy, direct_alice):
     contract = deploy(direct_deploy)
     leader = {"outcome": "concern_found", "basis": "supporting_context", "confidence": "high",

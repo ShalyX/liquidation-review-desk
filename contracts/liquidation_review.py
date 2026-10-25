@@ -262,6 +262,101 @@ def _rationale_ratio(rationale: str):
     return ratio
 
 
+def _utc_epoch(value: str):
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z", str(value or ""))
+    if not match:
+        return None
+    year, month, day, hour, minute, second = [int(part) for part in match.groups()]
+    if year < 1970 or month < 1 or month > 12 or day < 1 or day > 31 or hour > 23 or minute > 59 or second > 59:
+        return None
+    days = 365 * (year - 1970)
+    days += (year - 1) // 4 - 1969 // 4
+    days -= (year - 1) // 100 - 1969 // 100
+    days += (year - 1) // 400 - 1969 // 400
+    month_days = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    days += month_days[month - 1]
+    if month > 2 and year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
+        days += 1
+    days += day - 1
+    return days * 86400 + hour * 3600 + minute * 60 + second
+
+
+def _known_ethereum_decimals(address: str):
+    return {
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": 18,  # WETH
+        "0xdac17f958d2ee523a2206206994597c13d831ec7": 6,   # USDT
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 6,   # USDC
+        "0x6b175474e89094c44da98b954eedeac495271d0f": 18,  # DAI
+        "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": 8,   # WBTC
+    }.get(str(address or "").lower())
+
+
+def _historical_price_threshold_result(case: dict, claim: str, evidence_url: str, evidence_body: str):
+    """Resolve narrow percent-above-debt claims from a timestamp-matched Llama price snapshot."""
+    threshold = _claim_ratio_threshold(claim)
+    if threshold is None or not evidence_url.startswith("https://coins.llama.fi/prices/historical/"):
+        return None
+    event = case.get("liquidation", {})
+    collateral = str(event.get("collateral_asset", "")).lower()
+    debt = str(event.get("debt_asset", "")).lower()
+    collateral_decimals = _known_ethereum_decimals(collateral)
+    debt_decimals = _known_ethereum_decimals(debt)
+    if collateral_decimals is None or debt_decimals is None or collateral == debt:
+        return None
+    tx_timestamp = _utc_epoch(case.get("timestamp", ""))
+    if tx_timestamp is None:
+        return None
+    parts = evidence_url.split("/", 6)
+    if len(parts) < 7 or not parts[5].isdigit() or abs(int(parts[5]) - tx_timestamp) > 60:
+        return None
+    try:
+        payload = json.loads(evidence_body, parse_float=str)
+        coins = payload.get("coins", {})
+        collateral_coin = coins.get("ethereum:" + collateral, {})
+        debt_coin = coins.get("ethereum:" + debt, {})
+        if not collateral_coin or not debt_coin:
+            return None
+        expected = int(parts[5])
+        for coin, decimals in ((collateral_coin, collateral_decimals), (debt_coin, debt_decimals)):
+            if int(coin.get("timestamp", 0)) < 1 or abs(int(coin["timestamp"]) - expected) > 60:
+                return None
+            if "decimals" in coin and int(coin["decimals"]) != decimals:
+                return None
+        collateral_price_text = str(collateral_coin.get("price", ""))
+        debt_price_text = str(debt_coin.get("price", ""))
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", collateral_price_text) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", debt_price_text):
+            return None
+        collateral_price = _scaled_decimal(collateral_price_text)
+        debt_price = _scaled_decimal(debt_price_text)
+        collateral_raw = int(event.get("collateral_amount", "0"))
+        debt_raw = int(event.get("debt_to_cover", "0"))
+        if collateral_price <= 0 or debt_price <= 0 or collateral_raw <= 0 or debt_raw <= 0:
+            return None
+        collateral_value = collateral_raw * collateral_price // (10 ** collateral_decimals)
+        debt_value = debt_raw * debt_price // (10 ** debt_decimals)
+        if debt_value <= 0:
+            return None
+        ratio = collateral_value * 1000000000 // debt_value
+        percent_above = (ratio - 1000000000) * 100
+        ratio_text = str(ratio // 1000000000) + "." + str(ratio % 1000000000).rjust(9, "0")[:4]
+        percent_text = str(percent_above // 1000000000) + "." + str(percent_above % 1000000000).rjust(9, "0")[:2]
+        collateral_usd = collateral_value // 1000000000
+        debt_usd = debt_value // 1000000000
+    except Exception:
+        return None
+    if ratio > threshold:
+        outcome, basis, comparison = "concern_found", "supporting_context", "above"
+    else:
+        outcome, basis, comparison = "no_concern_identified", "contradicting_context", "at or below"
+    rationale = (
+        "The timestamp-matched price snapshot values collateral at about $" + str(collateral_usd)
+        + " and repaid debt at about $" + str(debt_usd) + "; the collateral-to-debt ratio is "
+        + ratio_text + " (" + percent_text + "% above debt), " + comparison
+        + " the stated threshold. This addresses the numeric claim only, not liquidation fairness."
+    )
+    return {"outcome": outcome, "basis": basis, "confidence": "high", "rationale": rationale}
+
+
 def _assessment_result(value, claim: str = "") -> dict:
     if isinstance(value, str):
         value = json.loads(value)
@@ -407,6 +502,13 @@ def _review(tx_hash: str, log_index: int, claim: str, evidence_url: str) -> dict
                 "case": case, "transaction_digest": fetched["transaction_digest"],
                 "logs_digest": fetched["logs_digest"], "rpc_digest": fetched["rpc_digest"], "evidence_digest": evidence["digest"]}
 
+    price_result = _historical_price_threshold_result(case, claim, evidence_url, evidence["text"])
+    if price_result is not None:
+        price_result.update({"case": case, "transaction_digest": fetched["transaction_digest"],
+                             "logs_digest": fetched["logs_digest"], "rpc_digest": fetched["rpc_digest"],
+                             "evidence_digest": evidence["digest"]})
+        return price_result
+
     prompt = f"""You are reviewing one completed Aave V3 liquidation as a cautious research triage assistant.
 This is not a legal finding, a protocol ruling, or a decision to reverse a transaction.
 
@@ -470,6 +572,10 @@ class LiquidationReview(gl.Contract):
     def _parse_review_result(self, value, claim: str = "") -> dict:
         """Expose the bounded review parser to direct tests."""
         return _assessment_result(value, claim)
+
+    def _historical_price_threshold_result(self, case: dict, claim: str, evidence_url: str, evidence_body: str):
+        """Expose the timestamp-matched price calculation to direct tests."""
+        return _historical_price_threshold_result(case, claim, evidence_url, evidence_body)
 
     def _reviews_equivalent(self, leader: dict, validator: dict) -> bool:
         """Expose consequential-field comparison to direct tests."""
