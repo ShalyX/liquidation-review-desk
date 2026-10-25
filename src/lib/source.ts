@@ -2,6 +2,10 @@ export const SAMPLE_TX = "0xb8d6664c5317bad149d2d3cd46794082580a5a2ae9b0cff74b7c
 export const AAVE_V3_ETH_POOL = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2";
 export const LIQUIDATION_TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286";
 const BLOCKSCOUT = "https://eth.blockscout.com/api/v2";
+// Explorer and public RPC responses can exceed 15 seconds during busy periods.
+// Keep the UI alive long enough to finish a real source check instead of turning
+// ordinary provider latency into a misleading signal-timeout failure.
+const SOURCE_REQUEST_TIMEOUT_MS = 30_000;
 // Keep the explorer and receipt sources independent. PublicNode is primary;
 // dRPC is a separate read-only fallback for browser/network-specific failures.
 const PUBLIC_RPCS = ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"];
@@ -66,7 +70,7 @@ function parseEvent(log: BlockscoutLog): LiquidationEvent | null {
 }
 
 async function getJson(url: string): Promise<unknown> {
-  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(SOURCE_REQUEST_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
   return response.json();
 }
@@ -79,13 +83,13 @@ async function verifyWithRpc(hash: string, selectedEvents: LiquidationEvent[], e
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [hash] }),
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(SOURCE_REQUEST_TIMEOUT_MS),
         }),
         fetch(rpcUrl, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "eth_chainId", params: [] }),
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(SOURCE_REQUEST_TIMEOUT_MS),
         }),
       ]);
       if (!receiptResponse.ok || !chainResponse.ok) continue;
