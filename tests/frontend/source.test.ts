@@ -40,6 +40,24 @@ describe("Ethereum receipt verification", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("uses the independent fallback RPC when the primary endpoint is unavailable", async () => {
+    const primary = "https://ethereum-rpc.publicnode.com";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/logs")) return new Response(JSON.stringify(fixture.logs), { status: 200 });
+      if (url.includes("/transactions/")) return new Response(JSON.stringify(fixture.transaction), { status: 200 });
+      if (url === primary) return new Response("unavailable", { status: 503 });
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "eth_chainId") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: "0x1" }), { status: 200 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: asRpcReceipt() }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchLiquidations(SAMPLE_TX);
+    expect(result.rpcVerified).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === "https://eth.drpc.org")).toBe(true);
+  });
+
   it("rejects an RPC receipt that omits one of the liquidation logs", async () => {
     const allEvents = asRpcReceipt().logs;
     const oneEvent = allEvents.filter((log) => Number(BigInt(String(log.logIndex))) === 2295);

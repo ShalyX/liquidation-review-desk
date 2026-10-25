@@ -2,7 +2,9 @@ export const SAMPLE_TX = "0xb8d6664c5317bad149d2d3cd46794082580a5a2ae9b0cff74b7c
 export const AAVE_V3_ETH_POOL = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2";
 export const LIQUIDATION_TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286";
 const BLOCKSCOUT = "https://eth.blockscout.com/api/v2";
-const PUBLIC_RPC = "https://ethereum-rpc.publicnode.com";
+// Keep the explorer and receipt sources independent. PublicNode is primary;
+// dRPC is a separate read-only fallback for browser/network-specific failures.
+const PUBLIC_RPCS = ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"];
 
 export type LiquidationEvent = {
   logIndex: number;
@@ -70,38 +72,41 @@ async function getJson(url: string): Promise<unknown> {
 }
 
 async function verifyWithRpc(hash: string, selectedEvents: LiquidationEvent[], expectedBlock: bigint): Promise<boolean> {
-  try {
-    const [receiptResponse, chainResponse] = await Promise.all([
-      fetch(PUBLIC_RPC, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [hash] }),
-        signal: AbortSignal.timeout(15_000),
-      }),
-      fetch(PUBLIC_RPC, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "eth_chainId", params: [] }),
-        signal: AbortSignal.timeout(15_000),
-      }),
-    ]);
-    if (!receiptResponse.ok || !chainResponse.ok) return false;
-    const [envelope, chainEnvelope] = await Promise.all([
-      receiptResponse.json() as Promise<{ result?: { transactionHash?: string; status?: string; blockNumber?: string; logs?: Array<{ address?: string; topics?: string[]; data?: string; logIndex?: string }> }; error?: { message?: string } }>,
-      chainResponse.json() as Promise<{ result?: string; error?: { message?: string } }>,
-    ]);
-    if (chainEnvelope.error || chainEnvelope.result?.toLowerCase() !== "0x1") return false;
-    const receipt = envelope.result;
-    if (!receipt || envelope.error || normalizeHash(receipt.transactionHash ?? "") !== hash || receipt.status !== "0x1" ||
-        receipt.blockNumber === undefined || BigInt(receipt.blockNumber) !== expectedBlock) return false;
-    const rpcEvents = (receipt.logs ?? []).flatMap((log) => {
-      const parsed = parseEvent({ address: { hash: log.address }, topics: log.topics, data: log.data, index: Number(BigInt(log.logIndex ?? "0x0")) });
-      return parsed ? [parsed] : [];
-    }).sort((a, b) => a.logIndex - b.logIndex);
-    return rpcEvents.length === selectedEvents.length && selectedEvents.every((event, index) => eventEqual(event, rpcEvents[index]));
-  } catch {
-    return false;
+  for (const rpcUrl of PUBLIC_RPCS) {
+    try {
+      const [receiptResponse, chainResponse] = await Promise.all([
+        fetch(rpcUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [hash] }),
+          signal: AbortSignal.timeout(15_000),
+        }),
+        fetch(rpcUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "eth_chainId", params: [] }),
+          signal: AbortSignal.timeout(15_000),
+        }),
+      ]);
+      if (!receiptResponse.ok || !chainResponse.ok) continue;
+      const [envelope, chainEnvelope] = await Promise.all([
+        receiptResponse.json() as Promise<{ result?: { transactionHash?: string; status?: string; blockNumber?: string; logs?: Array<{ address?: string; topics?: string[]; data?: string; logIndex?: string }> }; error?: { message?: string } }>,
+        chainResponse.json() as Promise<{ result?: string; error?: { message?: string } }>,
+      ]);
+      if (chainEnvelope.error || chainEnvelope.result?.toLowerCase() !== "0x1") continue;
+      const receipt = envelope.result;
+      if (!receipt || envelope.error || normalizeHash(receipt.transactionHash ?? "") !== hash || receipt.status !== "0x1" ||
+          receipt.blockNumber === undefined || BigInt(receipt.blockNumber) !== expectedBlock) continue;
+      const rpcEvents = (receipt.logs ?? []).flatMap((log) => {
+        const parsed = parseEvent({ address: { hash: log.address }, topics: log.topics, data: log.data, index: Number(BigInt(log.logIndex ?? "0x0")) });
+        return parsed ? [parsed] : [];
+      }).sort((a, b) => a.logIndex - b.logIndex);
+      if (rpcEvents.length === selectedEvents.length && selectedEvents.every((event, index) => eventEqual(event, rpcEvents[index]))) return true;
+    } catch {
+      // Try the independent fallback, but never accept without a full match.
+    }
   }
+  return false;
 }
 
 export function eventEqual(a: LiquidationEvent, b: LiquidationEvent): boolean {
