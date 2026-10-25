@@ -11,6 +11,7 @@ This is research triage, never a finding of misconduct or an automatic remedy.
 import hashlib
 import ipaddress
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -232,7 +233,36 @@ def _parse_tx_and_event(tx_json: str, logs_json: str, tx_hash: str, log_index: i
     }
 
 
-def _assessment_result(value) -> dict:
+def _scaled_decimal(value: str, scale: int = 1000000000) -> int:
+    whole, dot, fraction = value.partition(".")
+    digits = len(str(scale)) - 1
+    return int(whole) * scale + int((fraction + ("0" * digits))[:digits] or "0")
+
+
+def _claim_ratio_threshold(claim: str):
+    """Return a fixed-point collateral/debt threshold for simple percent-above claims."""
+    lowered = str(claim or "").lower()
+    if "debt" not in lowered or not any(term in lowered for term in ("above", "greater than", "exceed")):
+        return None
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", lowered)
+    if not match:
+        return None
+    percent = _scaled_decimal(match.group(1))
+    return 1000000000 + percent // 100
+
+
+def _rationale_ratio(rationale: str):
+    match = re.search(r"\bratio\b.{0,80}?([0-9]+(?:\.[0-9]+)?)", rationale.lower())
+    if not match:
+        return None
+    ratio = _scaled_decimal(match.group(1))
+    # Some models report the normalized ratio as a percent (for example 105.58).
+    if ratio > 10000000000:
+        ratio //= 100
+    return ratio
+
+
+def _assessment_result(value, claim: str = "") -> dict:
     if isinstance(value, str):
         value = json.loads(value)
     if not isinstance(value, dict) or set(value) != {"outcome", "basis", "confidence", "rationale"}:
@@ -263,10 +293,19 @@ def _assessment_result(value) -> dict:
         "supports further investigation", "warrants further investigation",
         "justifies further investigation", "exceeds the threshold", "above the threshold",
     ))
-    if outcome == "concern_found" and (basis != "supporting_context" or contradicts_concern):
+    threshold = _claim_ratio_threshold(claim)
+    ratio = _rationale_ratio(rationale)
+    numeric_direction_conflict = threshold is not None and ratio is not None and (
+        (outcome == "concern_found" and ratio <= threshold)
+        or (outcome == "no_concern_identified" and ratio > threshold)
+    )
+    if outcome == "concern_found" and (
+        basis != "supporting_context" or contradicts_concern or numeric_direction_conflict
+    ):
         raise ValueError("concern verdict conflicts with its basis or rationale")
     if outcome == "no_concern_identified" and (
         basis == "supporting_context" or (supports_concern and not contradicts_concern)
+        or numeric_direction_conflict
     ):
         raise ValueError("no-concern verdict conflicts with its basis or rationale")
     return {"outcome": outcome, "basis": basis, "confidence": confidence, "rationale": rationale}
@@ -386,7 +425,7 @@ For a concern with a numeric threshold, first state the exact comparison in your
 Return JSON only with exactly four keys: outcome (`concern_found`, `no_concern_identified`, `unclear`, `source_failure`), basis (`supporting_context`, `contradicting_context`, `insufficient_context`, `unrelated_context`, `source_unavailable`), confidence (`high`, `medium`, `low`), rationale (one or two plain sentences, max 850 characters). `unclear` and `source_failure` must use low or medium confidence. Do not output the exact transaction details in the rationale."""
     try:
         raw = gl.nondet.exec_prompt(prompt, response_format="json")
-        result = _assessment_result(raw)
+        result = _assessment_result(raw, claim)
     except Exception:
         result = {"outcome": "unclear", "basis": "insufficient_context", "confidence": "low",
                   "rationale": "The validators' verdict and rationale were inconsistent, so the review remains unclear."}
@@ -428,9 +467,9 @@ class LiquidationReview(gl.Contract):
         """Expose bounded response handling to direct tests."""
         return _body_text(body)
 
-    def _parse_review_result(self, value) -> dict:
+    def _parse_review_result(self, value, claim: str = "") -> dict:
         """Expose the bounded review parser to direct tests."""
-        return _assessment_result(value)
+        return _assessment_result(value, claim)
 
     def _reviews_equivalent(self, leader: dict, validator: dict) -> bool:
         """Expose consequential-field comparison to direct tests."""
@@ -470,7 +509,9 @@ class LiquidationReview(gl.Contract):
         result = dict(gl.vm.run_nondet_unsafe(leader_fn, validator_fn))
         event = result.get("case", {}).get("liquidation", {})
         case = result.get("case", {})
-        assessment = _assessment_result({key: result[key] for key in ("outcome", "basis", "confidence", "rationale")})
+        assessment = _assessment_result(
+            {key: result[key] for key in ("outcome", "basis", "confidence", "rationale")}, claim
+        )
         self.assessments[assessment_id] = Assessment(
             assessment_id=assessment_id,
             submitter=gl.message.sender_address,

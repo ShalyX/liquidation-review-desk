@@ -146,6 +146,39 @@ def test_review_result_parser_rejects_invalid_or_overconfident_outputs(direct_vm
         contract._parse_review_result(value)
 
 
+@pytest.mark.parametrize("outcome,basis,ratio,claim", [
+    ("no_concern_identified", "contradicting_context", "2.49",
+     "Does the cited market-price snapshot support the concern that collateral was more than 6% above debt repaid?"),
+    ("concern_found", "supporting_context", "1.05584",
+     "Does the cited market-price snapshot support the concern that collateral was more than 6% above debt repaid?"),
+])
+def test_numeric_ratio_cannot_conflict_with_claim_percentage(direct_vm, direct_deploy, direct_alice, outcome, basis, ratio, claim):
+    contract = deploy(direct_deploy)
+    result = {
+        "outcome": outcome,
+        "basis": basis,
+        "confidence": "high",
+        "rationale": f"The collateral-to-debt ratio is {ratio}, which supports this conclusion.",
+    }
+    with pytest.raises(Exception):
+        contract._parse_review_result(result, claim)
+
+
+def test_numeric_ratio_accepts_consistent_5_percent_and_6_percent_results(direct_vm, direct_deploy, direct_alice):
+    contract = deploy(direct_deploy)
+    rationale = "The collateral-to-debt ratio is 1.05584 (5.584%)."
+    below_6 = contract._parse_review_result({
+        "outcome": "no_concern_identified", "basis": "contradicting_context", "confidence": "high",
+        "rationale": rationale,
+    }, "Does the snapshot support concern that collateral was more than 6% above debt repaid?")
+    above_5 = contract._parse_review_result({
+        "outcome": "concern_found", "basis": "supporting_context", "confidence": "high",
+        "rationale": rationale,
+    }, "Does the snapshot support concern that collateral was more than 5% above debt repaid?")
+    assert below_6["outcome"] == "no_concern_identified"
+    assert above_5["outcome"] == "concern_found"
+
+
 def test_equivalence_compares_every_consequential_source_and_decision_field(direct_vm, direct_deploy, direct_alice):
     contract = deploy(direct_deploy)
     leader = {"outcome": "concern_found", "basis": "supporting_context", "confidence": "high",
