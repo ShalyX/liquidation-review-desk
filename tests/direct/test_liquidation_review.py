@@ -133,6 +133,8 @@ def test_public_https_evidence_url_is_accepted(direct_vm, direct_deploy, direct_
     {"outcome": "no_concern_identified", "basis": "supporting_context", "confidence": "high", "rationale": "x", "extra": "material"},
     {"outcome": "concern_found", "basis": "supporting_context", "confidence": "high",
      "rationale": "The value is below the stated threshold and contradicts the concern."},
+    {"outcome": "concern_found", "basis": "supporting_context", "confidence": "high",
+     "rationale": "Exact comparison: the ratio is about 1.05584 (5.584%), which is not above 1.06; this calculation actually contradicts that concern."},
     {"outcome": "no_concern_identified", "basis": "supporting_context", "confidence": "high",
      "rationale": "The evidence supports the concern and exceeds the threshold."},
     {"outcome": "no_concern_identified", "basis": "contradicting_context", "confidence": "high",

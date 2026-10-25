@@ -250,9 +250,12 @@ def _assessment_result(value) -> dict:
     rationale_lower = rationale.lower()
     contradicts_concern = any(marker in rationale_lower for marker in (
         "contradicts the concern", "does not support the concern", "doesn't support the concern",
+        "contradicts that concern", "contradicts the stated concern",
         "below the threshold", "below the stated threshold", "below the requested threshold",
         "fails to meet the threshold", "does not meet the threshold", "not meet the threshold",
-        "less than the threshold", "under the threshold", "not above the threshold",
+        "less than the threshold", "less than or equal", "at or below",
+        "under the threshold", "not above",
+        "does not exceed", "doesn't exceed", "not exceed", "fails to exceed",
     ))
     supports_concern = any(marker in rationale_lower for marker in (
         "supports the concern", "supports a material concern", "supports the stated concern",
