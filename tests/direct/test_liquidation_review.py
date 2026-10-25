@@ -135,6 +135,8 @@ def test_public_https_evidence_url_is_accepted(direct_vm, direct_deploy, direct_
      "rationale": "The value is below the stated threshold and contradicts the concern."},
     {"outcome": "no_concern_identified", "basis": "supporting_context", "confidence": "high",
      "rationale": "The evidence supports the concern and exceeds the threshold."},
+    {"outcome": "no_concern_identified", "basis": "contradicting_context", "confidence": "high",
+     "rationale": "The ratio is above the 1.05 threshold, so the snapshot supports investigating the concern."},
 ])
 def test_review_result_parser_rejects_invalid_or_overconfident_outputs(direct_vm, direct_deploy, direct_alice, value):
     contract = deploy(direct_deploy)

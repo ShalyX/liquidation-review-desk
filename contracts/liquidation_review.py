@@ -256,7 +256,9 @@ def _assessment_result(value) -> dict:
     ))
     supports_concern = any(marker in rationale_lower for marker in (
         "supports the concern", "supports a material concern", "supports the stated concern",
-        "exceeds the threshold", "above the threshold",
+        "supports investigating the concern", "supports investigating this concern",
+        "supports further investigation", "warrants further investigation",
+        "justifies further investigation", "exceeds the threshold", "above the threshold",
     ))
     if outcome == "concern_found" and (basis != "supporting_context" or contradicts_concern):
         raise ValueError("concern verdict conflicts with its basis or rationale")
@@ -376,7 +378,7 @@ Context source body: {evidence['text'][:10000]}
 
 Question: Does the cited context provide specific, relevant support for investigating the user's concern about this exact liquidation? Do not infer unfairness from the fact that a liquidation occurred, or from a price move alone. Do not treat missing context as proof of a problem. `no_concern_identified` means the supplied evidence does not substantiate the stated concern; it does not certify that the liquidation was fair. Use `unclear` when context is thin, indirect, or cannot establish the point. Use `concern_found` only when specific source content supports a material concern. Use `source_failure` only when an expected source was unavailable.
 
-For a concern with a numeric threshold, first state the exact comparison in your reasoning. When evidence provides quantities and prices, convert each token quantity using its correct decimals, calculate collateral value and debt value in a common currency, then compare the resulting ratio with the threshold. A value below the user's stated threshold does not support a claim that it exceeds that threshold. Keep the outcome, basis, and rationale aligned: a rationale that says the evidence is below or contradicts the threshold must never be paired with `concern_found` or `supporting_context`. If the evidence does not permit a reliable calculation, return `unclear` rather than guessing.
+For a concern with a numeric threshold, first state the exact comparison in your reasoning. When evidence provides quantities and prices, convert each token quantity using its correct decimals, calculate collateral value and debt value in a common currency, then compare the resulting ratio with the threshold. If the computed ratio is strictly greater than the stated threshold and the cited source is relevant, return `concern_found` with `supporting_context`; if it is less than or equal to the threshold, return `no_concern_identified` with `contradicting_context`. If the evidence does not permit a reliable calculation, return `unclear` rather than guessing. Keep the outcome, basis, and rationale aligned: a rationale that says the evidence is below or contradicts the threshold must never be paired with `concern_found` or `supporting_context`; a rationale that says the evidence supports investigating the concern must never be paired with `no_concern_identified`.
 
 Return JSON only with exactly four keys: outcome (`concern_found`, `no_concern_identified`, `unclear`, `source_failure`), basis (`supporting_context`, `contradicting_context`, `insufficient_context`, `unrelated_context`, `source_unavailable`), confidence (`high`, `medium`, `low`), rationale (one or two plain sentences, max 850 characters). `unclear` and `source_failure` must use low or medium confidence. Do not output the exact transaction details in the rationale."""
     try:
